@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Laser Stars — Spark the Screen</title>
+  <style>
+    html,body { height:100%; margin:0; background:#000; overflow:hidden; }
+    canvas { display:block; width:100%; height:100%; }
+    .ui {
+      position:fixed; left:12px; top:12px; z-index:20;
+      background:rgba(0,0,0,0.4); color:white; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;
+      padding:10px; border-radius:8px; backdrop-filter: blur(4px);
+    }
+    .ui label { display:block; font-size:13px; margin:6px 0 4px; }
+    .ui input[type=range] { width:180px; }
+    .btn { margin-top:8px; padding:6px 10px; border-radius:6px; background:#222; color:#fff; border:1px solid rgba(255,255,255,0.06); cursor:pointer; }
+    .small { font-size:12px; opacity:0.9; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <div class="ui" id="ui">
+    <div style="font-weight:600">Laser Stars</div>
+    <label class="small">Star count: <span id="starCountLabel">300</span></label>
+    <input id="starCount" type="range" min="50" max="1200" value="300" />
+    <label class="small">Laser frequency: <span id="freqLabel">1.2</span></label>
+    <input id="freq" type="range" min="0" max="3" step="0.05" value="1.2" />
+    <label class="small">Glow intensity: <span id="glowLabel">0.9</span></label>
+    <input id="glow" type="range" min="0" max="2" step="0.05" value="0.9" />
+    <button id="toggle" class="btn">Pause</button>
+    <div style="font-size:12px; margin-top:8px; opacity:0.9">Click or move pointer to spawn a laser. Use controls to customize.</div>
+  </div>
+
+  <script>
+    // Full-screen canvas setup
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    let DPR = Math.min(window.devicePixelRatio || 1, 2);
+    function resize() {
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(innerWidth * DPR);
+      canvas.height = Math.floor(innerHeight * DPR);
+      canvas.style.width = innerWidth + 'px';
+      canvas.style.height = innerHeight + 'px';
+      ctx.setTransform(DPR,0,0,DPR,0,0);
+    }
+    addEventListener('resize', resize);
+    resize();
+
+    // Utility
+    function rand(a,b){ return a + Math.random()*(b-a); }
+    function hsl(h,s,l){ return `hsl(${h} ${s}% ${l}%)`; }
+
+    // Stars
+    let stars = [];
+    let starCount = 300;
+    function makeStars(n){
+      stars = [];
+      for(let i=0;i<n;i++){
+        const r = Math.pow(Math.random(),2)*1.8 + 0.6;
+        stars.push({
+          x: Math.random()*innerWidth,
+          y: Math.random()*innerHeight,
+          r,
+          baseR: r,
+          twinkleSpeed: rand(0.002,0.01),
+          phase: Math.random()*Math.PI*2,
+          hue: Math.floor(rand(180,360)),
+          alpha: rand(0.5,1)
+        });
+      }
+    }
+    makeStars(starCount);
+
+    // Lasers
+    class Laser {
+      constructor(x,y,dx,dy,color){
+        this.x = x; this.y = y;
+        this.vx = dx; this.vy = dy;
+        this.life = 0;
+        this.maxLife = rand(60,160);
+        this.width = rand(2,6);
+        this.color = color || randomLaserColor();
+        this.sparkles = []; // moving sparks riding the beam
+      }
+      update(){
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life++;
+        // spawn sparkles along path
+        if(Math.random() < 0.6){
+          this.sparkles.push({
+            x: this.x + rand(-20,20),
+            y: this.y + rand(-20,20),
+            vx: rand(-0.6,0.6),
+            vy: rand(-0.6,0.6),
+            life: rand(8,36),
+            max: rand(12,50),
+            hue: this.color.h
+          });
+        }
+        this.sparkles = this.sparkles.filter(s => {
+          s.x += s.vx; s.y += s.vy; s.life++;
+          return s.life < s.max;
+        });
+      }
+      isDead(){ return this.life > this.maxLife; }
+      draw(ctx, glow){
+        // draw main beam (long, soft)
+        const alpha = Math.max(0, 1 - this.life/this.maxLife);
+        const g = ctx.createLinearGradient(this.x - this.vx*6, this.y - this.vy*6, this.x + this.vx*6, this.y + this.vy*6);
+        g.addColorStop(0, `hsla(${this.color.h} 100% 60% / ${alpha*0.0})`);
+        g.addColorStop(0.2, `hsla(${this.color.h} 100% 60% / ${alpha*0.15*glow})`);
+        g.addColorStop(0.5, `hsla(${this.color.h} 100% 60% / ${alpha*0.5*glow})`);
+        g.addColorStop(1, `hsla(${this.color.h} 100% 60% / ${alpha*0.0})`);
+        ctx.lineWidth = this.width;
+        ctx.strokeStyle = g;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(this.x - this.vx*12, this.y - this.vy*12);
+        ctx.lineTo(this.x + this.vx*12, this.y + this.vy*12);
+        ctx.stroke();
+
+        // bright core
+        ctx.lineWidth = Math.max(1, this.width * 0.6);
+        ctx.strokeStyle = `hsla(${this.color.h} 100% 60% / ${alpha*0.9})`;
+        ctx.beginPath();
+        ctx.moveTo(this.x - this.vx*6, this.y - this.vy*6);
+        ctx.lineTo(this.x + this.vx*6, this.y + this.vy*6);
+        ctx.stroke();
+
+        // sparkles
+        for(const s of this.sparkles){
+          const sa = 1 - s.life/s.max;
+          ctx.fillStyle = `hsla(${s.hue} 100% 70% / ${sa})`;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, 1.2 + sa*2.2, 0, Math.PI*2);
+          ctx.fill();
+        }
+      }
+    }
+
+    let lasers = [];
+    function randomLaserColor(){
+      const h = Math.floor(rand(0,360));
+      return { h };
+    }
+
+    // Automatic laser spawner (sweeping beams)
+    let autoTimer = 0;
+    let laserFreq = 1.2; // lasers per second-ish
+    let paused = false;
+    let glowIntensity = 0.9;
+
+    // Pointer interaction
+    addEventListener('pointerdown', (e) => {
+      spawnLaserFromCenter(e.clientX, e.clientY);
+    });
+    addEventListener('pointermove', (e) => {
+      if(e.buttons){
+        spawnLaserFromCenter(e.clientX, e.clientY);
+      }
+    });
+
+    function spawnLaserFromCenter(tx, ty){
+      const sx = innerWidth/2;
+      const sy = innerHeight/2;
+      const dx = (tx - sx) * 0.06 + rand(-1,1);
+      const dy = (ty - sy) * 0.06 + rand(-1,1);
+      lasers.push(new Laser(sx + rand(-30,30), sy + rand(-30,30), dx, dy, randomLaserColor()));
+      // keep array bounded
+      if(lasers.length > 200) lasers.splice(0, lasers.length - 200);
+    }
+
+    // UI bindings
+    const starCountEl = document.getElementById('starCount');
+    const starCountLabel = document.getElementById('starCountLabel');
+    starCountEl.addEventListener('input', e => {
+      starCount = +e.target.value;
+      starCountLabel.textContent = starCount;
+      makeStars(starCount);
+    });
+
+    const freqEl = document.getElementById('freq');
+    const freqLabel = document.getElementById('freqLabel');
+    freqEl.addEventListener('input', e => {
+      laserFreq = +e.target.value;
+      freqLabel.textContent = laserFreq.toFixed(2);
+    });
+
+    const glowEl = document.getElementById('glow');
+    const glowLabel = document.getElementById('glowLabel');
+    glowEl.addEventListener('input', e => {
+      glowIntensity = +e.target.value;
+      glowLabel.textContent = glowIntensity.toFixed(2);
+    });
+
+    const toggleBtn = document.getElementById('toggle');
+    toggleBtn.addEventListener('click', () => {
+      paused = !paused;
+      toggleBtn.textContent = paused ? 'Resume' : 'Pause';
+      if(!paused) last = performance.now(), loop();
+    });
+
+    // Render loop
+    let last = performance.now();
+    function loop(now = performance.now()){
+      const dt = Math.min(60, (now - last)) / 1000; // seconds, capped
+      last = now;
+      if(paused) return;
+
+      // subtle background gradient with faint nebula
+      ctx.fillStyle = '#020306';
+      ctx.fillRect(0,0,innerWidth,innerHeight);
+
+      // draw soft layered radial gradients to add depth
+      const rg = ctx.createRadialGradient(innerWidth*0.15, innerHeight*0.2, 20, innerWidth*0.3, innerHeight*0.3, innerWidth);
+      rg.addColorStop(0, 'rgba(8,10,20,0.05)');
+      rg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = rg;
+      ctx.fillRect(0,0,innerWidth,innerHeight);
+
+      // update and draw stars
+      for(const s of stars){
+        s.phase += s.twinkleSpeed * (0.5 + dt*10);
+        const tw = 0.5 + Math.sin(s.phase)*0.5;
+        const size = s.baseR * (0.6 + tw*0.9);
+        // glow
+        const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, size*8);
+        g.addColorStop(0, `hsla(${s.hue} 100% 75% / ${s.alpha*0.9})`);
+        g.addColorStop(0.15, `hsla(${s.hue} 90% 60% / ${s.alpha*0.6})`);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, size*6, 0, Math.PI*2);
+        ctx.fill();
+
+        // core
+        ctx.fillStyle = `hsla(${s.hue} 90% 80% / ${s.alpha})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, size*0.9, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      // spawn automatic lasers
+      autoTimer += dt * laserFreq;
+      if(autoTimer > 0.5){
+        // spawn some number depending on autoTimer
+        const count = Math.floor(autoTimer);
+        autoTimer -= count;
+        for(let i=0;i<count;i++){
+          // spawn from edges or center sweep
+          const fromCenter = Math.random() < 0.6;
+          if(fromCenter){
+            const angle = rand(0, Math.PI*2);
+            const speed = rand(3,9);
+            const dx = Math.cos(angle)*speed;
+            const dy = Math.sin(angle)*speed;
+            lasers.push(new Laser(innerWidth/2 + rand(-30,30), innerHeight/2 + rand(-30,30), dx, dy, randomLaserColor()));
+          } else {
+            // spawn from random edge towards center-ish
+            const edge = Math.floor(rand(0,4));
+            let sx, sy, tx, ty;
+            if(edge===0){ sx = -20; sy = rand(0,innerHeight); }
+            if(edge===1){ sx = innerWidth+20; sy = rand(0,innerHeight); }
+            if(edge===2){ sx = rand(0,innerWidth); sy = -20; }
+            if(edge===3){ sx = rand(0,innerWidth); sy = innerHeight+20; }
+            tx = rand(innerWidth*0.25, innerWidth*0.75);
+            ty = rand(innerHeight*0.25, innerHeight*0.75);
+            const vx = (tx - sx) * (0.02 + Math.random()*0.06);
+            const vy = (ty - sy) * (0.02 + Math.random()*0.06);
+            lasers.push(new Laser(sx, sy, vx, vy, randomLaserColor()));
+          }
+        }
+      }
+
+      // composite settings for additive glow
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      // update and draw lasers
+      for(let i = lasers.length-1; i >= 0; i--){
+        const L = lasers[i];
+        L.update();
+        L.draw(ctx, glowIntensity);
+        if(L.isDead()) lasers.splice(i,1);
+      }
+      ctx.restore();
+
+      // small overlay stars sparkle (random flashes)
+      if(Math.random() < 0.02){
+        const sx = rand(0,innerWidth), sy = rand(0,innerHeight);
+        const radial = ctx.createRadialGradient(sx,sy,0,sx,sy,40);
+        radial.addColorStop(0, 'rgba(255,255,255,0.8)');
+        radial.addColorStop(0.1, 'rgba(255,255,255,0.3)');
+        radial.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = radial;
+        ctx.fillRect(sx-40, sy-40, 80, 80);
+      }
+
+      // faint center glow
+      const cg = ctx.createRadialGradient(innerWidth/2, innerHeight/2, 0, innerWidth/2, innerHeight/2, Math.max(innerWidth, innerHeight)*0.8);
+      cg.addColorStop(0, 'rgba(20,10,30,0.02)');
+      cg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = cg;
+      ctx.fillRect(0,0,innerWidth,innerHeight);
+
+      requestAnimationFrame(loop);
+    }
+
+    // start
+    loop();
+
+    // initial instruction laser
+    setTimeout(()=> {
+      for(let i=0;i<6;i++){
+        const angle = (i/6)*Math.PI*2 + rand(-0.1,0.1);
+        const speed = rand(4,8);
+        lasers.push(new Laser(innerWidth/2, innerHeight/2, Math.cos(angle)*speed, Math.sin(angle)*speed, randomLaserColor()));
+      }
+    }, 200);
+
+    // keyboard: space to pause/resume, c to clear lasers
+    addEventListener('keydown', (e) => {
+      if(e.code === 'Space'){ paused = !paused; toggleBtn.textContent = paused ? 'Resume' : 'Pause'; if(!paused){ last = performance.now(); loop(); } }
+      if(e.key === 'c'){ lasers = []; }
+    });
+  </script>
+</body>
+</html>
